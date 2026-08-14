@@ -45,11 +45,23 @@ function shuffle(list) {
 
 export default function App() {
   const [html, setHtml] = useState('');
-  const [videos, setVideos] = useState(() => parseFavorites(seedHtml));
-  const [queue, setQueue] = useState(() => shuffle(parseFavorites(seedHtml)));
+  const [videos, setVideos] = useState(() => {
+    try {
+      const saved = localStorage.getItem('looptik-library');
+      if (saved) return JSON.parse(saved);
+    } catch { /* fall back to the bundled seed */ }
+    return parseFavorites(seedHtml);
+  });
+  const [queue, setQueue] = useState(() => {
+    try {
+      const saved = localStorage.getItem('looptik-library');
+      return shuffle(saved ? JSON.parse(saved) : parseFavorites(seedHtml));
+    } catch { return shuffle(parseFavorites(seedHtml)); }
+  });
   const [current, setCurrent] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [libraryMode, setLibraryMode] = useState('replace');
   const [error, setError] = useState('');
 
   const active = queue[current];
@@ -61,30 +73,28 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [playing, current, queue.length]);
 
-  useEffect(() => {
-    fetch('/api/library')
-      .then((response) => response.ok ? response.json() : [])
-      .then((sharedVideos) => {
-        if (Array.isArray(sharedVideos) && sharedVideos.length) {
-          setVideos(sharedVideos); setQueue(shuffle(sharedVideos)); setCurrent(0);
-        }
-      })
-      .catch(() => setError('The shared library server is unavailable. Showing the bundled seed instead.'));
-  }, []);
-
-  const importHtml = async () => {
+  const importHtml = () => {
     const items = parseFavorites(html);
     if (!items.length) {
       setError('No TikTok video links found. Paste the Favorites page HTML, including the <a href=".../video/..."> cards.');
       return;
     }
-    try {
-      const response = await fetch('/api/library', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ videos: items }) });
-      if (!response.ok) throw new Error();
-      setVideos(items); setQueue(shuffle(items)); setCurrent(0); setPlaying(false); setError(''); setShowImport(false);
-    } catch {
-      setError('Could not save to the shared library server. Start the app with npm run build, then npm start.');
+    setVideos(items); setQueue(shuffle(items)); setCurrent(0); setPlaying(false); setError(''); setShowImport(false);
+    localStorage.setItem('looptik-library', JSON.stringify(items));
+  };
+  const appendUrls = () => {
+    const items = parseFavorites(html);
+    if (!items.length) {
+      setError('No TikTok video URLs found. Paste full links such as https://www.tiktok.com/@creator/video/123…');
+      return;
     }
+    const merged = [...videos];
+    const knownIds = new Set(videos.map((video) => video.id));
+    items.forEach((video) => {
+      if (!knownIds.has(video.id)) { knownIds.add(video.id); merged.push(video); }
+    });
+    setVideos(merged); setQueue(shuffle(merged)); setCurrent(0); setError(''); setHtml('');
+    localStorage.setItem('looptik-library', JSON.stringify(merged));
   };
   const restart = () => { setQueue(shuffle(videos)); setCurrent(0); setPlaying(true); };
   const skip = () => setCurrent((i) => (i + 1) % queue.length);
@@ -107,13 +117,13 @@ export default function App() {
       <aside className="up-next"><div className="eyebrow">UP NEXT</div>{queue.slice(current + 1, current + 5).map((video, index) => <button key={video.id} onClick={() => setCurrent(current + index + 1)}><img src={video.thumbnail} alt="" /><span><small>0{index + 1}</small>{video.title}</span></button>)}</aside>
     </section>
     <section className="library">
-      <div><div className="eyebrow">SHARED LIBRARY</div><h3>{videos.length} saved videos in rotation</h3><p>No account or upload needed. Imports are stored on this server and shared across browsers.</p></div>
-      <button className="library-button" onClick={() => setShowImport(!showImport)}>{showImport ? 'Close importer' : 'Replace favorites HTML →'}</button>
+      <div><div className="eyebrow">YOUR LIBRARY</div><h3>{videos.length} saved videos in rotation</h3><p>No account or upload needed. Imports stay in this browser after a refresh.</p></div>
+      <div className="library-actions"><button className="library-button" onClick={() => { setLibraryMode('append'); setShowImport(true); }}>Add video URLs +</button><button className="library-button" onClick={() => { setLibraryMode('replace'); setShowImport(true); }}>Replace Favorites HTML →</button></div>
       {showImport && <div className="paste-card import-panel">
-        <div className="paste-head"><span>Replace your Favorites library</span><button className="sample" onClick={() => setHtml(sample)}>Use example</button></div>
-        <textarea value={html} onChange={(e) => setHtml(e.target.value)} placeholder={'Paste the copied TikTok Favorites HTML here...'} spellCheck="false" />
+        <div className="paste-head"><span>{libraryMode === 'append' ? 'Add TikTok video URLs to your library' : 'Replace your Favorites library'}</span><button className="sample" onClick={() => setHtml(sample)}>Use example</button></div>
+        <textarea value={html} onChange={(e) => setHtml(e.target.value)} placeholder={libraryMode === 'append' ? 'Paste one or more full TikTok video URLs here, one per line...' : 'Paste the copied TikTok Favorites HTML here...'} spellCheck="false" />
         {error && <p className="error">{error}</p>}
-        <button className="primary" onClick={importHtml}>Save and rebuild loop <b>→</b></button>
+        <button className="primary" onClick={libraryMode === 'append' ? appendUrls : importHtml}>{libraryMode === 'append' ? 'Add unique videos' : 'Save and rebuild loop'} <b>→</b></button>
       </div>}
     </section>
     <footer><span>Made for your saved moments.</span><span>No account, no upload — parsing happens in your browser.</span></footer>

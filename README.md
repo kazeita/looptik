@@ -5,8 +5,9 @@ LoopTik is a self-hosted shuffle player for TikTok Favorites. Paste a TikTok Fav
 ## Features
 
 - Parses TikTok Favorites HTML in the browser.
+- Appends individual TikTok video URLs to an existing library, with duplicate video IDs removed automatically.
 - Plays a shuffled TikTok embed queue with sound after the user presses Play.
-- Stores the most recently imported library on the server, so it is shared between browsers and persists across sessions.
+- Stores the most recently imported library in the browser, so it persists across refreshes without requiring a database.
 - Includes a bundled seed library for a ready-to-preview first launch.
 
 ## Run locally
@@ -23,15 +24,13 @@ Open `http://localhost:4173`.
 
 ## Deployment
 
-This is a Node.js app, not a static-only site: the server persists the shared video library at `data/library.json`. Deploy it to a host that supports a persistent writable disk/volume, then run `npm run build` followed by `npm start`.
+LoopTik is a static Vite app and can be deployed directly to Vercel. Each visitor’s imported Favorites are stored only in their own browser with `localStorage`.
 
-For containers or ephemeral hosts, mount persistent storage at the app's `data/` directory. Without it, the shared library resets when the service restarts.
+`server.js` remains in the repository for a future self-hosted/shared-library deployment. It is not required for Vercel.
 
 ## Privacy
 
-Anyone who can access the deployed app can replace and view its shared library. Do not deploy it publicly with personal Favorites data unless you add authentication.
-
-The runtime library at `data/library.json` is ignored by Git. The included `seed.html` is bundled into the app; review or replace it before publishing if it contains personal data.
+Imports never leave the visitor’s browser. The included `seed.html` is bundled into the app; review or replace it before publishing if it contains personal data.
 
 ## License
 
