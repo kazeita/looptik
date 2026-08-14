@@ -6,6 +6,7 @@ LoopTik is a self-hosted shuffle player for TikTok Favorites. Paste a TikTok Fav
 
 - Parses TikTok Favorites HTML in the browser.
 - Appends individual TikTok video URLs to an existing library, with duplicate video IDs removed automatically.
+- Imports JSON containing TikTok video URLs and appends only videos not already in the library.
 - Plays a shuffled TikTok embed queue with sound after the user presses Play.
 - Stores the most recently imported library in the browser, so it persists across refreshes without requiring a database.
 - Includes a bundled seed library for a ready-to-preview first launch.
