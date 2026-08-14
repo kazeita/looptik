@@ -4,3 +4,5 @@ data/library.json
 .env
 .env.*
 !.env.example
+dist/index.html
+seed.html
