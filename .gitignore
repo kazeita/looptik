@@ -1,0 +1,6 @@
+node_modules/
+dist/
+data/library.json
+.env
+.env.*
+!.env.example

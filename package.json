@@ -1,0 +1,32 @@
+{
+  "name": "looptik",
+  "private": false,
+  "version": "1.0.0",
+  "description": "A self-hosted, shared shuffle player for TikTok Favorites exports.",
+  "license": "MIT",
+  "keywords": [
+    "tiktok",
+    "favorites",
+    "shuffle",
+    "react",
+    "self-hosted"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "latest",
+    "vite": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "express": "latest"
+  },
+  "devDependencies": {}
+}
