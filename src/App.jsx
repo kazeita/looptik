@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import seedHtml from '../seed.html?raw';
+import seedData from './seed.json';
 
 const tiktokSample = `<a href="https://www.tiktok.com/@zackdfilms92/video/7668383288989338894"><img alt="Could A Giant Magnet Move An Asteroid? 🤯 created by Zack D. Films" src="https://p16-common-sign.tiktokcdn.com/tos-useast5-p-85c255-tx/oU5A4NidI8zYFrpgYojfkwwEBPCniBAHPAY1cI~tplv-tiktokx-origin.image?dr=14575" /></a>`;
 const youtubeSample = `<a href="https://www.youtube.com/watch?v=aqz-KE-bpKQ"><img alt="Big Buck Bunny" src="https://img.youtube.com/vi/aqz-KE-bpKQ/mqdefault.jpg" /></a>`;
@@ -125,6 +125,17 @@ function parseFavorites(platform, html) {
   return items;
 }
 
+// seed.json can either be a flat array (treated as TikTok's default library, matching the
+// old seed.html behavior) or an object keyed by platform, e.g. { tiktok: [...], youtube: [...] }.
+// Re-uses the same HTML/JSON/URL parsing rules as manual imports, so any shape that already
+// works when pasted (objects with url/title fields, bare links, etc.) works here too.
+function seedItemsFor(platform) {
+  if (!seedData) return [];
+  const bucket = Array.isArray(seedData) ? (platform === 'tiktok' ? seedData : []) : seedData[platform];
+  if (!bucket || !bucket.length) return [];
+  try { return parseFavorites(platform, JSON.stringify(bucket)); } catch { return []; }
+}
+
 const PLATFORMS = {
   tiktok: {
     label: 'TikTok',
@@ -195,7 +206,7 @@ function usePlatformLibrary(storageKey, seedItems, legacyKey) {
   return { videos, queue, current, playing, setPlaying, setCurrent, persist, append, restart, nextVideo, previousVideo, playVideoAt };
 }
 
-function TikTokPlayer({ active, playing, setPlaying, setCurrent, queueLength, audioPrefsRef, controlsRef }) {
+function TikTokPlayer({ active, playing, setPlaying, setCurrent, queueLength, audioPrefsRef, setMuted, controlsRef }) {
   const playerRef = useRef(null);
   const playerSrc = useMemo(() => {
     const { volume, muted } = audioPrefsRef.current;
@@ -214,19 +225,27 @@ function TikTokPlayer({ active, playing, setPlaying, setCurrent, queueLength, au
         if (message.value === 0) setCurrent((i) => (i + 1) % queueLength);
         if (message.value === 1) setPlaying(true);
       }
-      if (message.type === 'onMute') { audioPrefsRef.current.muted = message.value; localStorage.setItem('looptik-muted', String(message.value)); }
+      if (message.type === 'onMute') { setMuted(message.value); }
       if (message.type === 'onVolumeChange') { audioPrefsRef.current.volume = message.value; localStorage.setItem('looptik-volume', String(message.value)); }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [playing, queueLength, setCurrent, setPlaying, audioPrefsRef]);
+  }, [playing, queueLength, setCurrent, setPlaying, setMuted, audioPrefsRef]);
 
   useEffect(() => {
     controlsRef.current.togglePlayback = () => {
       const type = playing ? 'pause' : 'play';
       playerRef.current?.contentWindow?.postMessage({ type, 'x-tiktok-player': true }, '*');
-      if (!playing && !audioPrefsRef.current.muted) playerRef.current?.contentWindow?.postMessage({ type: 'unMute', 'x-tiktok-player': true }, '*');
+      // Re-assert whatever mute state we're supposed to be in — the embed can silently
+      // force itself muted (browser autoplay policy) without telling us, so this resync
+      // has to run every time playback (re)starts, not just when we're already unmuted.
+      if (!playing) playerRef.current?.contentWindow?.postMessage({ type: audioPrefsRef.current.muted ? 'mute' : 'unMute', 'x-tiktok-player': true }, '*');
       setPlaying(!playing);
+    };
+    controlsRef.current.toggleMute = () => {
+      const next = !audioPrefsRef.current.muted;
+      playerRef.current?.contentWindow?.postMessage({ type: next ? 'mute' : 'unMute', 'x-tiktok-player': true }, '*');
+      setMuted(next);
     };
   });
 
@@ -265,7 +284,7 @@ function useYouTubeApi() {
   return ready;
 }
 
-function YouTubePlayer({ active, playing, setPlaying, setCurrent, queueLength, audioPrefsRef, controlsRef }) {
+function YouTubePlayer({ active, playing, setPlaying, setCurrent, queueLength, audioPrefsRef, setMuted, controlsRef }) {
   const apiReady = useYouTubeApi();
   const containerId = useRef(`yt-player-${Math.random().toString(36).slice(2)}`).current;
   const playerInstanceRef = useRef(null);
@@ -287,7 +306,7 @@ function YouTubePlayer({ active, playing, setPlaying, setCurrent, queueLength, a
             try {
               const muted = event.target.isMuted();
               const volume = event.target.getVolume();
-              if (muted !== audioPrefsRef.current.muted) { audioPrefsRef.current.muted = muted; localStorage.setItem('looptik-muted', String(muted)); }
+              if (muted !== audioPrefsRef.current.muted) setMuted(muted);
               if (volume !== audioPrefsRef.current.volume) { audioPrefsRef.current.volume = volume; localStorage.setItem('looptik-volume', String(volume)); }
             } catch { /* player torn down mid-poll */ }
           }, 3000);
@@ -320,10 +339,19 @@ function YouTubePlayer({ active, playing, setPlaying, setCurrent, queueLength, a
       const state = player.getPlayerState?.();
       if (state === window.YT.PlayerState.PLAYING) { player.pauseVideo(); setPlaying(false); }
       else {
-        if (!audioPrefsRef.current.muted) player.unMute();
+        // Re-assert whatever mute state we're supposed to be in, the same way TikTok does —
+        // don't gate this behind "already unmuted", or a stuck-muted player can never recover.
+        if (audioPrefsRef.current.muted) player.mute(); else player.unMute();
         player.playVideo();
         setPlaying(true);
       }
+    };
+    controlsRef.current.toggleMute = () => {
+      const player = playerInstanceRef.current;
+      if (!player) return;
+      const next = !audioPrefsRef.current.muted;
+      if (next) player.mute(); else player.unMute();
+      setMuted(next);
     };
   });
 
@@ -340,12 +368,19 @@ export default function App() {
   const [error, setError] = useState('');
   const [page, setPage] = useState(() => window.location.hash === '#import' ? 'import' : 'player');
   const audioPrefsRef = useRef({ volume: Number(localStorage.getItem('looptik-volume') || 100), muted: localStorage.getItem('looptik-muted') === 'true' });
-  const controlsRef = useRef({ togglePlayback: () => {} });
+  const [mutedUI, setMutedUI] = useState(audioPrefsRef.current.muted);
+  const setMuted = (value) => {
+    audioPrefsRef.current.muted = value;
+    localStorage.setItem('looptik-muted', String(value));
+    setMutedUI(value);
+  };
+  const controlsRef = useRef({ togglePlayback: () => {}, toggleMute: () => {} });
   const swipeStartRef = useRef(null);
   const didSwipeRef = useRef(false);
+  const fileInputRef = useRef(null);
 
-  const tiktokLib = usePlatformLibrary('looptik-library-tiktok', () => parseFavorites('tiktok', seedHtml), 'looptik-library');
-  const youtubeLib = usePlatformLibrary('looptik-library-youtube', []);
+  const tiktokLib = usePlatformLibrary('looptik-library-tiktok', () => seedItemsFor('tiktok'), 'looptik-library');
+  const youtubeLib = usePlatformLibrary('looptik-library-youtube', () => seedItemsFor('youtube'));
   const lib = platform === 'tiktok' ? tiktokLib : youtubeLib;
   const config = PLATFORMS[platform];
 
@@ -377,6 +412,15 @@ export default function App() {
     lib.append(items);
     setError(''); setHtml('');
   };
+  const handleFilePicked = (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = ''; // allow re-selecting the same file later
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => { setHtml(String(reader.result || '')); setError(''); };
+    reader.onerror = () => setError('Could not read that file. Try pasting the contents instead.');
+    reader.readAsText(file);
+  };
   const beginSwipe = (event) => { swipeStartRef.current = event.touches[0]?.clientX ?? null; };
   const finishSwipe = (event) => {
     const end = event.changedTouches[0]?.clientX;
@@ -391,6 +435,7 @@ export default function App() {
   const mobilePrevious = () => { if (didSwipeRef.current) { didSwipeRef.current = false; return; } lib.previousVideo(); };
 
   return <main>
+    <input ref={fileInputRef} type="file" accept=".json,application/json,.html,text/html,.txt,text/plain" onChange={handleFilePicked} style={{ display: 'none' }} />
     <header>
       <a className="brand" href="#" onClick={() => goTo('player')}>LOOP<span>TIK</span></a>
       <nav className="platform-tabs">
@@ -405,7 +450,7 @@ export default function App() {
       <h1>Turn saved {config.label}s<br />into a <em>loop.</em></h1>
       <p className="intro">Paste your {config.label} {config.sourceLabel} HTML and we’ll build a private, endlessly shuffled queue from the videos you already love.</p>
       <div className="paste-card">
-        <div className="paste-head"><span>Paste {config.sourceLabel} HTML</span><button className="sample" onClick={() => setHtml(config.sample)}>Use example</button></div>
+        <div className="paste-head"><span>Paste {config.sourceLabel} HTML</span><span className="paste-head-actions"><button className="sample" onClick={() => fileInputRef.current?.click()}>Upload file</button><button className="sample" onClick={() => setHtml(config.sample)}>Use example</button></span></div>
         <textarea value={html} onChange={(e) => setHtml(e.target.value)} placeholder={config.pastePlaceholder} spellCheck="false" />
         {error && <p className="error">{error}</p>}
         <button className="primary" onClick={importHtml}>Build my loop <b>→</b></button>
@@ -417,15 +462,15 @@ export default function App() {
         <div className="eyebrow">NOW PLAYING</div>
         <h2>{active?.title}</h2>
         {active && <a href={active.url} target="_blank" rel="noreferrer">Open on {config.label} ↗</a>}
-        <div className="controls"><button onClick={lib.previousVideo}>← <span>Previous</span></button><button onClick={() => controlsRef.current.togglePlayback()}>{lib.playing ? '❚❚' : '▶'} <span>{lib.playing ? 'Pause' : 'Play with sound'}</span></button><button onClick={lib.nextVideo}><span>Next</span> →</button></div>
+        <div className="controls"><button onClick={lib.previousVideo}>← <span>Previous</span></button><button onClick={() => controlsRef.current.togglePlayback()}>{lib.playing ? '❚❚' : '▶'} <span>{lib.playing ? 'Pause' : 'Play with sound'}</span></button><button onClick={lib.nextVideo}><span>Next</span> →</button><button onClick={() => controlsRef.current.toggleMute()}>{mutedUI ? '🔇' : '🔊'} <span>{mutedUI ? 'Unmute' : 'Mute'}</span></button></div>
         <div className="queue-meta"><b>{lib.queue.length ? lib.current + 1 : 0}</b> / {lib.queue.length} in this shuffle <span>{remaining} next</span></div>
         <button className="restart" onClick={lib.restart}>↻ Reshuffle all {lib.videos.length} videos</button>
       </aside>
       <div className="stage">
         <div className="mobile-player-wrap"><button className="mobile-chevron previous-chevron" aria-label="Previous video" onClick={mobilePrevious} onTouchStart={beginSwipe} onTouchEnd={finishSwipe}>‹</button><div className="phone">
           {active?.id ? (platform === 'tiktok'
-            ? <TikTokPlayer active={active} playing={lib.playing} setPlaying={lib.setPlaying} setCurrent={lib.setCurrent} queueLength={lib.queue.length} audioPrefsRef={audioPrefsRef} controlsRef={controlsRef} />
-            : <YouTubePlayer active={active} playing={lib.playing} setPlaying={lib.setPlaying} setCurrent={lib.setCurrent} queueLength={lib.queue.length} audioPrefsRef={audioPrefsRef} controlsRef={controlsRef} />)
+            ? <TikTokPlayer active={active} playing={lib.playing} setPlaying={lib.setPlaying} setCurrent={lib.setCurrent} queueLength={lib.queue.length} audioPrefsRef={audioPrefsRef} setMuted={setMuted} controlsRef={controlsRef} />
+            : <YouTubePlayer active={active} playing={lib.playing} setPlaying={lib.setPlaying} setCurrent={lib.setCurrent} queueLength={lib.queue.length} audioPrefsRef={audioPrefsRef} setMuted={setMuted} controlsRef={controlsRef} />)
             : <div className="empty-phone">Import some {config.label} videos to get started.</div>}
         </div><button className="mobile-chevron next-chevron" aria-label="Next video" onClick={mobileNext} onTouchStart={beginSwipe} onTouchEnd={finishSwipe}>›</button></div>
         <p>{lib.playing ? 'Advances when the video ends · Sound on' : 'Press play to start with sound'} · Playback is powered by {config.label}</p>
@@ -436,7 +481,7 @@ export default function App() {
       <div><div className="eyebrow">YOUR LIBRARY</div><h3>{lib.videos.length} saved {config.label} videos in rotation</h3><p>No account or upload needed. Imports stay in this browser after a refresh.</p></div>
       <div className="library-actions"><button className="library-button" onClick={() => { setLibraryMode('append'); setShowImport(true); }}>Add video URLs +</button><button className="library-button" onClick={() => { setLibraryMode('json'); setShowImport(true); }}>Add JSON +</button><button className="library-button" onClick={() => { setLibraryMode('replace'); setShowImport(true); }}>Replace {config.sourceLabel} HTML →</button></div>
       {showImport && <div className="paste-card import-panel">
-        <div className="paste-head"><span>{libraryMode === 'append' ? `Add ${config.label} video URLs to your library` : libraryMode === 'json' ? `Add ${config.label} videos from JSON` : `Replace your ${config.sourceLabel} library`}</span><button className="sample" onClick={() => setHtml(config.sample)}>Use example</button></div>
+        <div className="paste-head"><span>{libraryMode === 'append' ? `Add ${config.label} video URLs to your library` : libraryMode === 'json' ? `Add ${config.label} videos from JSON` : `Replace your ${config.sourceLabel} library`}</span><span className="paste-head-actions"><button className="sample" onClick={() => fileInputRef.current?.click()}>Upload file</button><button className="sample" onClick={() => setHtml(config.sample)}>Use example</button></span></div>
         <textarea value={html} onChange={(e) => setHtml(e.target.value)} placeholder={libraryMode === 'append' ? config.urlPlaceholder : libraryMode === 'json' ? config.jsonPlaceholder : config.pastePlaceholder} spellCheck="false" />
         {error && <p className="error">{error}</p>}
         <button className="primary" onClick={libraryMode === 'replace' ? importHtml : appendUrls}>{libraryMode === 'replace' ? 'Save and rebuild loop' : 'Add unique videos'} <b>→</b></button>
