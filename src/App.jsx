@@ -220,10 +220,22 @@ function TikTokPlayer({ active, playing, setPlaying, setCurrent, queueLength, au
       const message = event.data;
       if (!message || message['x-tiktok-player'] !== true) return;
       const send = (type) => playerRef.current?.contentWindow?.postMessage({ type, 'x-tiktok-player': true }, '*');
-      if (message.type === 'onPlayerReady') { send(audioPrefsRef.current.muted ? 'mute' : 'unMute'); if (playing) send('play'); }
+      if (message.type === 'onPlayerReady') {
+        const muteCmd = audioPrefsRef.current.muted ? 'mute' : 'unMute';
+        send(muteCmd);
+        if (playing) send('play');
+        // The embed can ignore the first command while it settles. Retry after a
+        // short delay so the player honours our preference once it's fully active.
+        setTimeout(() => send(audioPrefsRef.current.muted ? 'mute' : 'unMute'), 500);
+      }
       if (message.type === 'onStateChange') {
         if (message.value === 0) setCurrent((i) => (i + 1) % queueLength);
-        if (message.value === 1) setPlaying(true);
+        if (message.value === 1) {
+          setPlaying(true);
+          // Re-assert mute state when playback actually starts — this is the
+          // moment the player is definitely active and will honour the command.
+          send(audioPrefsRef.current.muted ? 'mute' : 'unMute');
+        }
       }
       // onMute events from the embed are intentionally ignored: the embed fires them for
       // browser-forced autoplay muting, echoes of our own commands, and user actions inside
@@ -248,6 +260,8 @@ function TikTokPlayer({ active, playing, setPlaying, setCurrent, queueLength, au
     controlsRef.current.toggleMute = () => {
       const next = !audioPrefsRef.current.muted;
       playerRef.current?.contentWindow?.postMessage({ type: next ? 'mute' : 'unMute', 'x-tiktok-player': true }, '*');
+      // Retry to handle the player discarding the first command during a transition.
+      setTimeout(() => playerRef.current?.contentWindow?.postMessage({ type: audioPrefsRef.current.muted ? 'mute' : 'unMute', 'x-tiktok-player': true }, '*'), 300);
       setMuted(next);
     };
   });
@@ -257,12 +271,6 @@ function TikTokPlayer({ active, playing, setPlaying, setCurrent, queueLength, au
     key={active?.id}
     title={active?.title}
     src={playerSrc}
-    onLoad={() => {
-      if (playing) {
-        playerRef.current?.contentWindow?.postMessage({ type: audioPrefsRef.current.muted ? 'mute' : 'unMute', 'x-tiktok-player': true }, '*');
-        playerRef.current?.contentWindow?.postMessage({ type: 'play', 'x-tiktok-player': true }, '*');
-      }
-    }}
     allow="autoplay; encrypted-media; picture-in-picture"
     allowFullScreen
   />;
