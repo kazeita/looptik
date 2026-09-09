@@ -207,6 +207,9 @@ function usePlatformLibrary(storageKey, seedItems, legacyKey) {
 }
 
 function TikTokPlayer({ active, playing, setPlaying, setCurrent, queueLength, audioPrefsRef, setMuted, controlsRef }) {
+  // Set this true before we send our own mute/unMute command so the echoed
+  // onMute event the embed fires back doesn't overwrite the user's preference.
+  const ignoreNextMuteRef = useRef(false);
   const playerRef = useRef(null);
   const playerSrc = useMemo(() => {
     const { volume, muted } = audioPrefsRef.current;
@@ -220,12 +223,12 @@ function TikTokPlayer({ active, playing, setPlaying, setCurrent, queueLength, au
       const message = event.data;
       if (!message || message['x-tiktok-player'] !== true) return;
       const send = (type) => playerRef.current?.contentWindow?.postMessage({ type, 'x-tiktok-player': true }, '*');
-      if (message.type === 'onPlayerReady') { send(audioPrefsRef.current.muted ? 'mute' : 'unMute'); if (playing) send('play'); }
+      if (message.type === 'onPlayerReady') { ignoreNextMuteRef.current = true; send(audioPrefsRef.current.muted ? 'mute' : 'unMute'); if (playing) send('play'); }
       if (message.type === 'onStateChange') {
         if (message.value === 0) setCurrent((i) => (i + 1) % queueLength);
         if (message.value === 1) setPlaying(true);
       }
-      if (message.type === 'onMute') { setMuted(message.value); }
+      if (message.type === 'onMute') { if (ignoreNextMuteRef.current) { ignoreNextMuteRef.current = false; } else { setMuted(message.value); } }
       if (message.type === 'onVolumeChange') { audioPrefsRef.current.volume = message.value; localStorage.setItem('looptik-volume', String(message.value)); }
     };
     window.addEventListener('message', onMessage);
@@ -244,6 +247,7 @@ function TikTokPlayer({ active, playing, setPlaying, setCurrent, queueLength, au
     };
     controlsRef.current.toggleMute = () => {
       const next = !audioPrefsRef.current.muted;
+      ignoreNextMuteRef.current = true;
       playerRef.current?.contentWindow?.postMessage({ type: next ? 'mute' : 'unMute', 'x-tiktok-player': true }, '*');
       setMuted(next);
     };
